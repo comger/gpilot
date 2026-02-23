@@ -92,13 +92,11 @@ function captureEvent(action: ActionType, el: Element, extra?: { inputValue?: st
 
     // 截图（在发送 step 前先捕获当前视口）
     captureScreenshot().then(screenshotDataURL => {
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             type: 'STEP_CAPTURED',
             payload: { ...step, screenshot_data_url: screenshotDataURL, screenshot_width: window.innerWidth, screenshot_height: window.innerHeight },
-        }, (resp) => {
-            if (resp?.stepIndex) {
-                updateStepCounter(resp.stepIndex);
-            }
+        }).then(resp => {
+            if (resp?.stepIndex) updateStepCounter(resp.stepIndex);
         });
     });
 }
@@ -107,11 +105,31 @@ function captureEvent(action: ActionType, el: Element, extra?: { inputValue?: st
 // 截图捕获（调用 chrome.tabs API）
 // ─────────────────────────────────────
 async function captureScreenshot(): Promise<string> {
-    return new Promise(resolve => {
-        // 通过 chrome extension API 捕获当前 tab
-        chrome.runtime.sendMessage({ type: 'CAPTURE_SCREENSHOT' }, (dataURL: string) => {
-            resolve(dataURL || '');
-        });
+    try {
+        const dataURL = await safeSendMessage({ type: 'CAPTURE_SCREENSHOT' });
+        return (dataURL as string) || '';
+    } catch {
+        return '';
+    }
+}
+
+// ─────────────────────────────────────
+// 安全 sendMessage（处理 SW 被终止的情况）
+// ─────────────────────────────────────
+function safeSendMessage(msg: any): Promise<any> {
+    return new Promise((resolve) => {
+        try {
+            chrome.runtime.sendMessage(msg, (resp) => {
+                if (chrome.runtime.lastError) {
+                    // SW 被终止或接收端不存在 → 静默忽略
+                    resolve(null);
+                    return;
+                }
+                resolve(resp);
+            });
+        } catch (e) {
+            resolve(null);
+        }
     });
 }
 
@@ -207,7 +225,7 @@ function handleMarkClick(el: Element, e: MouseEvent) {
             is_active: true,
         };
         maskRules.push(rule);
-        chrome.runtime.sendMessage({ type: 'MASKING_RULE_ADD', payload: rule });
+        safeSendMessage({ type: 'MASKING_RULE_ADD', payload: rule });
 
         exitMarkMode();
     });
@@ -248,9 +266,9 @@ function showFloatingConsole() {
     // 按钮事件
     floatingConsole.querySelector('#gpilot-pause')?.addEventListener('click', () => {
         if (!isPaused) {
-            chrome.runtime.sendMessage({ type: 'SESSION_PAUSE' });
+            safeSendMessage({ type: 'SESSION_PAUSE' });
         } else {
-            chrome.runtime.sendMessage({ type: 'SESSION_RESUME' });
+            safeSendMessage({ type: 'SESSION_RESUME' });
         }
     });
 
@@ -258,8 +276,10 @@ function showFloatingConsole() {
         enterMarkMode();
     });
 
-    floatingConsole.querySelector('#gpilot-stop')?.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'SESSION_STOP' });
+    floatingConsole.querySelector('#gpilot-stop')?.addEventListener('click', async () => {
+        const stopBtn = floatingConsole?.querySelector('#gpilot-stop') as HTMLButtonElement | null;
+        if (stopBtn) { stopBtn.textContent = '停止中...'; stopBtn.disabled = true; }
+        await safeSendMessage({ type: 'SESSION_STOP' });
     });
 }
 

@@ -8,6 +8,7 @@ export type MessageType =
     | 'SESSION_RESUME'
     | 'SESSION_STOP'
     | 'STEP_CAPTURED'
+    | 'CAPTURE_SCREENSHOT'
     | 'MASKING_RULE_ADD'
     | 'MASKING_APPLY_ALL'
     | 'STATE_SYNC_REQUEST'
