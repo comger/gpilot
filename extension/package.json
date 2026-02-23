@@ -4,6 +4,8 @@
   "type": "module",
   "description": "G-Pilot - 智能政务助手 Chrome 扩展",
   "scripts": {
+    "generate-icons": "node scripts/generate-icons.mjs",
+    "prebuild": "node scripts/generate-icons.mjs",
     "dev": "vite --mode development",
     "build": "vite build && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.mjs",
