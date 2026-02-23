@@ -11,9 +11,9 @@ import (
 // 基础模型（所有表共用）
 // ─────────────────────────────────────
 type Base struct {
-	ID        string `gorm:"primaryKey;type:text"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID        string    `gorm:"primaryKey;type:text" json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (b *Base) BeforeCreate(tx *gorm.DB) error {
@@ -28,11 +28,11 @@ func (b *Base) BeforeCreate(tx *gorm.DB) error {
 // ─────────────────────────────────────
 type Project struct {
 	Base
-	Name             string `gorm:"not null"`
-	Description      string
-	MaskingProfileID string
-	TemplateType     string    `gorm:"default:'both'"` // business|technical|both
-	Sessions         []Session `gorm:"foreignKey:ProjectID"`
+	Name             string    `gorm:"not null"              json:"name"`
+	Description      string    `                             json:"description"`
+	MaskingProfileID string    `                             json:"masking_profile_id,omitempty"`
+	TemplateType     string    `gorm:"default:'both'"        json:"template_type"`
+	Sessions         []Session `gorm:"foreignKey:ProjectID"  json:"sessions,omitempty"`
 }
 
 // ─────────────────────────────────────
@@ -40,14 +40,14 @@ type Project struct {
 // ─────────────────────────────────────
 type Session struct {
 	Base
-	ProjectID      string `gorm:"not null;index"`
-	Title          string `gorm:"not null"`
-	Status         string `gorm:"default:'idle'"` // idle|recording|paused|completed|generating|exported
-	StartedAt      *time.Time
-	EndedAt        *time.Time
-	TargetURL      string
-	GeneratedDocID string
-	Steps          []RecordingStep `gorm:"foreignKey:SessionID"`
+	ProjectID      string          `gorm:"not null;index"             json:"project_id"`
+	Title          string          `gorm:"not null"                   json:"title"`
+	Status         string          `gorm:"default:'idle'"             json:"status"`
+	StartedAt      *time.Time      `                                  json:"started_at,omitempty"`
+	EndedAt        *time.Time      `                                  json:"ended_at,omitempty"`
+	TargetURL      string          `                                  json:"target_url"`
+	GeneratedDocID string          `                                  json:"generated_doc_id,omitempty"`
+	Steps          []RecordingStep `gorm:"foreignKey:SessionID"       json:"steps,omitempty"`
 }
 
 // ─────────────────────────────────────
@@ -55,24 +55,24 @@ type Session struct {
 // ─────────────────────────────────────
 type RecordingStep struct {
 	Base
-	SessionID      string `gorm:"not null;index"`
-	StepIndex      int    `gorm:"not null"`
-	Timestamp      int64
-	Action         string `gorm:"not null"` // click|input|select|drag|navigation|scroll|hover
-	TargetSelector string
-	TargetXPath    string
-	TargetElement  string
-	AriaLabel      string
-	MaskedText     string
-	InputValue     string
-	PageURL        string
-	PageTitle      string
-	ScreenshotID   string
-	AIDescription  string
-	AINotes        string
-	IsEdited       bool   `gorm:"default:false"`
-	IsMasked       bool   `gorm:"default:false"`
-	DOMFingerprint string `gorm:"index"`
+	SessionID      string `gorm:"not null;index"  json:"session_id"`
+	StepIndex      int    `gorm:"not null"        json:"step_index"`
+	Timestamp      int64  `                       json:"timestamp"`
+	Action         string `gorm:"not null"        json:"action"`
+	TargetSelector string `                       json:"target_selector"`
+	TargetXPath    string `                       json:"target_xpath"`
+	TargetElement  string `                       json:"target_element"`
+	AriaLabel      string `                       json:"aria_label,omitempty"`
+	MaskedText     string `                       json:"masked_text"`
+	InputValue     string `                       json:"input_value,omitempty"`
+	PageURL        string `                       json:"page_url"`
+	PageTitle      string `                       json:"page_title"`
+	ScreenshotID   string `                       json:"screenshot_id,omitempty"`
+	AIDescription  string `                       json:"ai_description,omitempty"`
+	AINotes        string `                       json:"ai_notes,omitempty"`
+	IsEdited       bool   `gorm:"default:false"   json:"is_edited"`
+	IsMasked       bool   `gorm:"default:false"   json:"is_masked"`
+	DOMFingerprint string `gorm:"index"           json:"dom_fingerprint,omitempty"`
 }
 
 // ─────────────────────────────────────
@@ -80,14 +80,14 @@ type RecordingStep struct {
 // ─────────────────────────────────────
 type Screenshot struct {
 	Base
-	SessionID     string `gorm:"not null;index"`
-	StepID        string `gorm:"not null;index"`
-	CapturedAt    int64
-	DataURL       string `gorm:"type:text"` // base64（已脱敏）
-	Width         int
-	Height        int
-	MaskedRegions string `gorm:"type:text"` // JSON
-	IsRawDeleted  bool   `gorm:"default:false"`
+	SessionID     string `gorm:"not null;index"  json:"session_id"`
+	StepID        string `gorm:"not null;index"  json:"step_id"`
+	CapturedAt    int64  `                       json:"captured_at"`
+	DataURL       string `gorm:"type:text"       json:"data_url"`
+	Width         int    `                       json:"width"`
+	Height        int    `                       json:"height"`
+	MaskedRegions string `gorm:"type:text"       json:"masked_regions,omitempty"`
+	IsRawDeleted  bool   `gorm:"default:false"   json:"is_raw_deleted"`
 }
 
 // ─────────────────────────────────────
@@ -95,20 +95,20 @@ type Screenshot struct {
 // ─────────────────────────────────────
 type MaskingProfile struct {
 	Base
-	Name  string        `gorm:"not null"`
-	Rules []MaskingRule `gorm:"foreignKey:ProfileID"`
+	Name  string        `gorm:"not null"                json:"name"`
+	Rules []MaskingRule `gorm:"foreignKey:ProfileID"    json:"rules,omitempty"`
 }
 
 // MaskingRule 脱敏规则
 type MaskingRule struct {
 	Base
-	ProfileID   string `gorm:"not null;index"`
-	RuleType    string `gorm:"not null"` // regex|exact|element_click
-	Pattern     string `gorm:"not null"`
-	Alias       string `gorm:"not null"`
-	Scope       string `gorm:"default:'session'"` // global|session
-	IsActive    bool   `gorm:"default:true"`
-	Description string
+	ProfileID   string `gorm:"not null;index"  json:"profile_id"`
+	RuleType    string `gorm:"not null"        json:"rule_type"`
+	Pattern     string `gorm:"not null"        json:"pattern"`
+	Alias       string `gorm:"not null"        json:"alias"`
+	Scope       string `gorm:"default:'session'" json:"scope"`
+	IsActive    bool   `gorm:"default:true"    json:"is_active"`
+	Description string `                       json:"description,omitempty"`
 }
 
 // ─────────────────────────────────────
@@ -116,11 +116,11 @@ type MaskingRule struct {
 // ─────────────────────────────────────
 type GeneratedDocument struct {
 	Base
-	SessionID     string `gorm:"not null;index"`
-	ProjectID     string `gorm:"not null;index"`
-	Status        string `gorm:"default:'draft'"` // draft|reviewed|exported
-	BusinessView  string `gorm:"type:text"`       // JSON
-	TechnicalView string `gorm:"type:text"`       // JSON
+	SessionID     string `gorm:"not null;index"  json:"session_id"`
+	ProjectID     string `gorm:"not null;index"  json:"project_id"`
+	Status        string `gorm:"default:'draft'" json:"status"`
+	BusinessView  string `gorm:"type:text"       json:"business_view"`
+	TechnicalView string `gorm:"type:text"       json:"technical_view"`
 }
 
 // ─────────────────────────────────────
@@ -128,10 +128,10 @@ type GeneratedDocument struct {
 // ─────────────────────────────────────
 type LLMProvider struct {
 	Base
-	Name      string `gorm:"not null"` // gemini|zhipu|ollama|openrouter|openai
-	APIKey    string
-	BaseURL   string
-	Model     string
-	IsDefault bool `gorm:"default:false"`
-	IsActive  bool `gorm:"default:true"`
+	Name      string `gorm:"not null"        json:"name"`
+	APIKey    string `                       json:"-"` // 不输出密钥
+	BaseURL   string `                       json:"base_url"`
+	Model     string `                       json:"model"`
+	IsDefault bool   `gorm:"default:false"   json:"is_default"`
+	IsActive  bool   `gorm:"default:true"    json:"is_active"`
 }
