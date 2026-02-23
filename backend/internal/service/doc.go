@@ -71,7 +71,10 @@ func (s *DocService) BuildDocument(sessionID string) (*GeneratedDocContent, erro
 	for _, step := range steps {
 		desc := step.AIDescription
 		if desc == "" {
-			desc = fmt.Sprintf("\u5728[%s]\u9875\u9762\u6267\u884c %s \u64cd\u4f5c", step.PageTitle, step.Action)
+			desc = step.TargetElement
+		}
+		if desc == "" {
+			desc = fmt.Sprintf("在 [%s] 页面执行 %s 操作", step.PageTitle, step.Action)
 		}
 
 		bizStep := DocStep{

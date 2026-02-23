@@ -12,6 +12,7 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(99, 179, 237, 0.1);
   padding: 0;
   min-width: 220px;
+  max-width: 320px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   color: #e2e8f0;
@@ -19,6 +20,65 @@
   -webkit-backdrop-filter: blur(12px);
   user-select: none;
   overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.gpilot-console.minimized {
+  min-width: 52px;
+  width: 52px;
+  height: 52px;
+  max-width: 52px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.gpilot-console.minimized .gpilot-header,
+.gpilot-console.minimized .gpilot-body {
+  display: none !important;
+}
+
+.gpilot-mini-icon {
+  display: none;
+  font-size: 24px;
+  position: relative;
+}
+
+.gpilot-console.minimized .gpilot-mini-icon {
+  display: flex;
+}
+
+.gpilot-mini-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #fc8181;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 14px;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(245, 101, 101, 0.5);
+}
+
+.gpilot-minimize-btn {
+  background: none;
+  border: none;
+  color: #718096;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.gpilot-minimize-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
 }
 
 .gpilot-header {
@@ -59,8 +119,15 @@
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .gpilot-body {
@@ -159,7 +226,7 @@
 }
 
 .gpilot-mark-tip button {
-  background: rgba(255,255,255,0.2);
+  background: rgba(255, 255, 255, 0.2);
   border: none;
   color: white;
   padding: 4px 12px;
@@ -224,4 +291,41 @@
   flex: 1;
   font-size: 12px;
   padding: 6px;
+}
+
+/* 录制清单样式 */
+#gpilot-session-list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 179, 237, 0.3) transparent;
+}
+
+#gpilot-session-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+#gpilot-session-list::-webkit-scrollbar-thumb {
+  background: rgba(99, 179, 237, 0.3);
+  border-radius: 2px;
+}
+
+.gpilot-session-item {
+  padding: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background 0.2s;
+}
+
+.gpilot-session-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.gpilot-session-item:last-child {
+  border-bottom: none;
+}
+
+/* 截图时隐藏 */
+.gpilot-hide {
+  display: none !important;
 }

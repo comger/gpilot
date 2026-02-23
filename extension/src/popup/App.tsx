@@ -32,7 +32,6 @@ export default function App() {
     // ─── 从 background 同步状态 ───
     useEffect(() => {
         const syncFromBackground = () => {
-            // 如果刚刚由本地操作触发更新，跳过一次同步
             if (localUpdateRef.current) {
                 localUpdateRef.current = false;
                 return;
@@ -45,12 +44,23 @@ export default function App() {
             });
         };
 
-        // 立即同步一次
-        syncFromBackground();
+        // 监听来自 background 的主动更新广播
+        const messageListener = (msg: any) => {
+            if (msg.type === 'STEP_UPDATED' && msg.payload?.stepCount !== undefined) {
+                setRecordingState(prev => ({ ...prev, stepCount: msg.payload.stepCount }));
+            } else if (msg.type === 'SESSION_START' || msg.type === 'SESSION_STOP' || msg.type === 'SESSION_PAUSE' || msg.type === 'SESSION_RESUME') {
+                // 状态重大变更，全量同步一次
+                setTimeout(syncFromBackground, 100);
+            }
+        };
+        chrome.runtime.onMessage.addListener(messageListener);
 
-        // 每 1.5s 轮询（录制中时步骤计数需要更新）
+        syncFromBackground();
         const timer = setInterval(syncFromBackground, 1500);
-        return () => clearInterval(timer);
+        return () => {
+            clearInterval(timer);
+            chrome.runtime.onMessage.removeListener(messageListener);
+        };
     }, []);
 
     // ─── 处理 popup 触发的状态变更 ───

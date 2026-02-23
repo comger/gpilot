@@ -1,39 +1,43 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const target = process.env.VITE_BUILD_TARGET || 'popup';
 
 export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      '@': resolve(new URL('.', import.meta.url).pathname, 'src'),
-    },
-  },
+  plugins: [target === 'popup' ? react() : []],
+  base: './',
   build: {
     outDir: 'dist',
-    emptyOutDir: true,
-    rollupOptions: {
+    emptyOutDir: target === 'popup',
+    lib: target === 'popup' ? false : {
+      entry: resolve(__dirname, target === 'content' ? 'src/content/index.ts' : 'src/background/index.ts'),
+      formats: [target === 'content' ? 'iife' : 'es'],
+      name: target === 'content' ? 'GpilotContent' : 'GpilotBackground',
+      fileName: () => (target === 'content' ? 'content.js' : 'background.js'),
+    },
+    rollupOptions: target === 'popup' ? {
       input: {
-        popup: resolve(new URL('.', import.meta.url).pathname, 'src/popup/index.html'),
-        background: resolve(new URL('.', import.meta.url).pathname, 'src/background/index.ts'),
-        content: resolve(new URL('.', import.meta.url).pathname, 'src/content/index.ts'),
+        popup: resolve(__dirname, 'src/popup/index.html'),
       },
       output: {
-        entryFileNames: (chunk) => {
-          if (chunk.name === 'background') return 'background.js';
-          if (chunk.name === 'content') return 'content.js';
-          return '[name]-[hash].js';
-        },
-        chunkFileNames: 'chunks/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: (info) => {
-          if (info.name === 'content.css') return 'content.css';
-          if (info.name === 'popup.css') return 'popup.css';
-          if (info.name?.endsWith('.css')) return '[name].css';
+          if (info.name === 'index.css' || info.name === 'popup.css') return 'popup.css';
           return 'assets/[name]-[hash][extname]';
         },
-      },
+      }
+    } : {
+      output: {
+        assetFileNames: (info) => {
+          if (info.name === 'index.css' || info.name === 'style.css' || info.name === 'content.css') return 'content.css';
+          return 'assets/[name]-[hash][extname]';
+        }
+      }
     },
-    // Service workers 不支持 ES modules in Chrome, 但 popup 和 content 可以
     target: 'es2020',
   },
 });

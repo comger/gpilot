@@ -24,26 +24,27 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
     const stoppedSessionId = stoppedSession?.id;
 
     useEffect(() => {
-        apiGet<Project[]>('/projects').then(setProjects).catch(() => { });
+        // 先加载项目列表，再尝试恢复上一次选择的项目
+        apiGet<Project[]>('/projects').then(projs => {
+            setProjects(projs);
+            chrome.storage.local.get('lastProjectId', (res) => {
+                if (res.lastProjectId) {
+                    setSelectedProject(res.lastProjectId);
+                }
+            });
+        }).catch(() => { });
     }, []);
+
+    const onProjectSelect = (pid: string) => {
+        setSelectedProject(pid);
+        chrome.storage.local.set({ lastProjectId: pid });
+    };
 
     useEffect(() => {
         if (selectedProject) {
             apiGet<Session[]>(`/sessions?project_id=${selectedProject}`).then(setSessions).catch(() => { });
         }
     }, [selectedProject]);
-
-    // 录制结束后，重新拉取 session 状态（确认 completed）
-    useEffect(() => {
-        if (stoppedSessionId) {
-            const timer = setTimeout(() => {
-                apiGet<Session>(`/sessions/${stoppedSessionId}`)
-                    .then(s => setStoppedSession(s))
-                    .catch(() => { });
-            }, 800); // 等后端写入
-            return () => clearTimeout(timer);
-        }
-    }, [stoppedSessionId]);
 
     // ─────────────────────────────────────
     // 录制控制
@@ -220,7 +221,7 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                             <select
                                 className="select"
                                 value={selectedProject}
-                                onChange={e => setSelectedProject(e.target.value)}
+                                onChange={e => onProjectSelect(e.target.value)}
                             >
                                 <option value="">-- 选择项目 --</option>
                                 {projects.map(p => (
@@ -299,18 +300,20 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                     </div>
                 )}
 
-                {/* 最近的 sessions */}
+                {/* 录制历史清单 */}
                 {sessions.length > 0 && selectedProject && !stoppedSession && (
                     <div className="card">
-                        <div className="card-title">最近录制</div>
-                        {sessions.slice(0, 4).map(s => (
+                        <div className="card-title">录制文件清单 ({sessions.length})</div>
+                        {sessions.map(s => (
                             <div key={s.id} className="list-item" style={{ cursor: 'default' }}>
                                 <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => {
                                     setStoppedSession(s);
                                     setDocStatus('idle');
                                 }}>
                                     <div className="list-item-title">{s.title}</div>
-                                    <div className="list-item-sub">{new Date(s.created_at).toLocaleDateString('zh-CN')}</div>
+                                    <div className="list-item-sub">
+                                        {new Date(s.created_at).toLocaleDateString('zh-CN')} · {s.step_count || 0} 步
+                                    </div>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                     <span className={`badge ${s.status === 'completed' ? 'badge-success' : s.status === 'recording' ? 'badge-recording' : 'badge-idle'}`}>

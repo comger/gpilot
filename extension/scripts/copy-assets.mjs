@@ -39,33 +39,50 @@ writeFileSync(resolve(distDir, 'manifest.json'), JSON.stringify(manifest, null, 
 console.log('✅ manifest.json copied to dist/');
 
 // 复制并处理 CSS 文件
-const contentCss = resolve(distDir, 'index2.css');
-const popupCss = resolve(distDir, 'index.css');
+const possibleContentCss = [resolve(distDir, 'style.css'), resolve(distDir, 'index2.css'), resolve(distDir, 'index.css')];
+const possiblePopupCss = [resolve(distDir, 'popup.css'), resolve(distDir, 'index.css'), resolve(distDir, 'style.css')];
 
-if (existsSync(contentCss)) {
-    copyFileSync(contentCss, resolve(distDir, 'content.css'));
+let contentFound = false;
+for (const src of possibleContentCss) {
+    if (existsSync(src) && !contentFound) {
+        copyFileSync(src, resolve(distDir, 'content.css'));
+        contentFound = true;
+        console.log(`✅ Found and copied content.css from ${src}`);
+    }
+}
+
+let popupFound = false;
+// 注意：如果 popup.css 已经存在（由 vite 配置直接生成），则优先使用
+if (existsSync(resolve(distDir, 'popup.css'))) {
+    popupFound = true;
 } else {
-    // 兜底：如果 Vite 输出了不同的名字，尝试寻找最大的那个或者特定的
-    console.log('ℹ️ index2.css not found, trying other CSS names...');
+    for (const src of possiblePopupCss) {
+        if (existsSync(src) && !popupFound && src !== resolve(distDir, 'content.css')) {
+            copyFileSync(src, resolve(distDir, 'popup.css'));
+            popupFound = true;
+            console.log(`✅ Found and copied popup.css from ${src}`);
+        }
+    }
 }
 
-if (existsSync(popupCss)) {
-    copyFileSync(popupCss, resolve(distDir, 'popup.css'));
+// 移动并修正 popup.html 到根目录，扁平化结构更稳健
+const oldPopupHtmlPath = resolve(distDir, 'src/popup/index.html');
+const newPopupHtmlPath = resolve(distDir, 'popup.html');
+
+if (existsSync(oldPopupHtmlPath)) {
+    let html = readFileSync(oldPopupHtmlPath, 'utf-8');
+    // 扁平化后，路径变为相对于根
+    html = html.replace(/src=\"[^\"]+assets\//g, 'src="./assets/');
+    html = html.replace(/href=\"[^\"]+\.css\"/g, 'href="./popup.css"');
+
+    writeFileSync(newPopupHtmlPath, html);
+    console.log('✅ Popup HTML moved to root (dist/popup.html) and paths flattened');
 }
 
-// 清理不需要的 index.css (如果已重命名)
-if (existsSync(resolve(distDir, 'index.css'))) {
-    // unlinkSync(resolve(distDir, 'index.css')); // 暂时保留以防万一
-}
-
-// 修正 popup/index.html 中的 CSS 引用
-const popupHtmlPath = resolve(distDir, 'src/popup/index.html');
-if (existsSync(popupHtmlPath)) {
-    let html = readFileSync(popupHtmlPath, 'utf-8');
-    html = html.replace(/index\.css/g, '../../popup.css');
-    writeFileSync(popupHtmlPath, html);
-    console.log('✅ Updated popup/index.html CSS path');
-}
+// 修正 manifest.json 中的 popup 路径
+manifest.action.default_popup = 'popup.html';
+writeFileSync(resolve(distDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+console.log('✅ manifest.json updated with flattened popup path');
 
 // 如果 icons 存在则复制
 const iconsDir = resolve(root, 'public/icons');

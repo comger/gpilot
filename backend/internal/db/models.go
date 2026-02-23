@@ -47,6 +47,7 @@ type Session struct {
 	EndedAt        *time.Time      `                                  json:"ended_at,omitempty"`
 	TargetURL      string          `                                  json:"target_url"`
 	GeneratedDocID string          `                                  json:"generated_doc_id,omitempty"`
+	StepCount      int64           `gorm:"-"                          json:"step_count"`
 	Steps          []RecordingStep `gorm:"foreignKey:SessionID"       json:"steps,omitempty"`
 }
 

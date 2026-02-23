@@ -7,7 +7,7 @@
     "generate-icons": "node scripts/generate-icons.mjs",
     "prebuild": "node scripts/generate-icons.mjs",
     "dev": "vite --mode development",
-    "build": "vite build && npm run copy-assets",
+    "build": "VITE_BUILD_TARGET=popup vite build && VITE_BUILD_TARGET=content vite build && VITE_BUILD_TARGET=background vite build && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.mjs",
     "preview": "vite preview"
   },

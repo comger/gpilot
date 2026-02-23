@@ -51,6 +51,14 @@ func GetProject(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "project not found"})
 		return
 	}
+
+	// 填充 sessions 的步骤统计
+	for i := range project.Sessions {
+		var count int64
+		db.DB.Model(&db.RecordingStep{}).Where("session_id = ?", project.Sessions[i].ID).Count(&count)
+		project.Sessions[i].StepCount = count
+	}
+
 	c.JSON(http.StatusOK, gin.H{"data": project})
 }
 
@@ -74,6 +82,14 @@ func GetSessions(c *gin.Context) {
 		q = q.Where("project_id = ?", projectID)
 	}
 	q.Find(&sessions)
+
+	// 填充步骤统计
+	for i := range sessions {
+		var count int64
+		db.DB.Model(&db.RecordingStep{}).Where("session_id = ?", sessions[i].ID).Count(&count)
+		sessions[i].StepCount = count
+	}
+
 	c.JSON(http.StatusOK, gin.H{"data": sessions})
 }
 

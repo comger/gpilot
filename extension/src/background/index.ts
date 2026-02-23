@@ -1,5 +1,5 @@
 // Service Worker (Background) - G-Pilot 消息路由中枢
-import type { ExtMessage, RecordingState, MaskingRule } from '../shared/types';
+import type { ExtMessage, RecordingState, MaskingRule, MessageType } from '../shared/types';
 import { API_BASE } from '../shared/types';
 
 // ─────────────────────────────────────
@@ -16,6 +16,9 @@ const state: RecordingState = {
 
 // Service Worker 启动时，从 storage 恢复状态
 // （MV3 Service Worker 可能被 Chrome 随时终止，重启后内存清空）
+let isInitialized = false;
+const initializationPromise = restoreState();
+
 async function restoreState() {
     try {
         const stored = await chrome.storage.local.get('recordingState');
@@ -27,26 +30,28 @@ async function restoreState() {
             state.projectId = s.projectId ?? null;
             state.stepCount = s.stepCount ?? 0;
             state.maskRules = s.maskRules ?? [];
-            console.log('[G-Pilot] State restored from storage:', state.isRecording ? 'recording' : 'idle');
+            console.log('[G-Pilot] State restored from storage:', state);
         }
+        isInitialized = true;
     } catch (e) {
         console.warn('[G-Pilot] Failed to restore state:', e);
     }
 }
 
-// 立即恢复状态
-restoreState();
-
 // ─────────────────────────────────────
 // 消息路由
 // ─────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg: ExtMessage, _sender, sendResponse) => {
-    handleMessage(msg)
-        .then(sendResponse)
-        .catch(err => {
+    (async () => {
+        await initializationPromise;
+        try {
+            const resp = await handleMessage(msg);
+            sendResponse(resp);
+        } catch (err) {
             console.warn('[G-Pilot] Message handler error:', err);
             sendResponse({ error: String(err) });
-        });
+        }
+    })();
     return true; // 保持异步响应通道
 });
 
@@ -54,19 +59,23 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
     switch (msg.type) {
         case 'SESSION_START': {
             const { projectId, title, targetUrl } = msg.payload as any;
+            console.log(`[G-Pilot] Starting session for project: ${projectId}, title: ${title}`);
 
             let session: any;
             try {
-                const res = await fetch(`${API_BASE}/sessions`, {
+                const url = `${API_BASE}/sessions`;
+                const res = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ project_id: projectId, title, target_url: targetUrl }),
                 });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
                 const data = await res.json();
                 session = data.data;
+                console.log(`[G-Pilot] Session created:`, session);
             } catch (e) {
-                return { error: `后端连接失败: ${e}，请确认 http://localhost:3210 已启动` };
+                console.error(`[G-Pilot] Failed to create session:`, e);
+                return { error: `后端连接失败: ${e}，请确认 ${API_BASE} 已启动且可访问` };
             }
 
             state.sessionId = session.id;
@@ -74,7 +83,12 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
             state.isRecording = true;
             state.isPaused = false;
             state.stepCount = 0;
-            await chrome.storage.local.set({ recordingState: { ...state } });
+
+            // 持久化项目 ID 和录制状态
+            await chrome.storage.local.set({
+                recordingState: { ...state },
+                lastProjectId: projectId
+            });
 
             // 通知当前 tab 的 content script 开始录制
             await sendToActiveTab({ type: 'SESSION_START', payload: { sessionId: session.id, maskRules: state.maskRules } });
@@ -82,6 +96,7 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
         }
 
         case 'SESSION_PAUSE': {
+            console.log(`[G-Pilot] Pausing session: ${state.sessionId}`);
             state.isPaused = true;
             await chrome.storage.local.set({ recordingState: { ...state } });
             if (state.sessionId) await safeUpdateSessionStatus(state.sessionId, 'paused');
@@ -90,6 +105,7 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
         }
 
         case 'SESSION_RESUME': {
+            console.log(`[G-Pilot] Resuming session: ${state.sessionId}`);
             state.isPaused = false;
             await chrome.storage.local.set({ recordingState: { ...state } });
             if (state.sessionId) await safeUpdateSessionStatus(state.sessionId, 'recording');
@@ -98,6 +114,7 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
         }
 
         case 'SESSION_STOP': {
+            console.log(`[G-Pilot] Stopping session: ${state.sessionId}`);
             const stoppedSessionId = state.sessionId;
             state.isRecording = false;
             state.isPaused = false;
@@ -111,13 +128,17 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
             await chrome.storage.local.set({ recordingState: { ...state } });
 
             // 通知 content script（可能已不在了，忽略错误）
-            await sendToActiveTab({ type: 'SESSION_STOP' });
-            return { ok: true, stoppedSessionId };
+            await sendToActiveTab({ type: 'SESSION_STOP', payload: { projectId: state.projectId } });
+            return { ok: true, stoppedSessionId, projectId: state.projectId };
         }
 
         case 'STEP_CAPTURED': {
-            if (!state.isRecording || state.isPaused || !state.sessionId) return { ok: false };
+            if (!state.isRecording || state.isPaused || !state.sessionId) {
+                console.warn(`[G-Pilot] Step capture ignored. recording:${state.isRecording}, paused:${state.isPaused}, sessionId:${state.sessionId}`);
+                return { ok: false, reason: 'not_recording_or_paused' };
+            }
             const payload = msg.payload as any;
+            console.log(`[G-Pilot] Step captured: ${payload.action}, target: ${payload.target_element}`);
 
             // 截图逻辑移到 background 处理，更稳健
             let screenshotDataURL = payload.screenshot_data_url || '';
@@ -133,7 +154,8 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
             }
 
             try {
-                const stepRes = await fetch(`${API_BASE}/sessions/${state.sessionId}/steps`, {
+                const url = `${API_BASE}/sessions/${state.sessionId}/steps`;
+                const stepRes = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -142,13 +164,26 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
                         screenshot_data_url: screenshotDataURL
                     }),
                 });
-                if (!stepRes.ok) throw new Error(`HTTP ${stepRes.status}`);
+                if (!stepRes.ok) throw new Error(`HTTP ${stepRes.status}: ${await stepRes.text()}`);
                 const stepData = await stepRes.json();
+
                 state.stepCount++;
+                console.log(`[G-Pilot] Step saved. Current count: ${state.stepCount}`);
                 await chrome.storage.local.set({ recordingState: { ...state } });
+
+                const updateMsg = {
+                    type: 'STEP_UPDATED' as MessageType,
+                    payload: { stepCount: state.stepCount }
+                };
+
+                // 通知当前 Web 页面（更新悬浮窗）
+                sendToActiveTab(updateMsg).catch(() => { });
+                // 通知 Popup（如果开启了）
+                chrome.runtime.sendMessage(updateMsg).catch(() => { });
+
                 return { stepId: stepData.data?.id, stepIndex: state.stepCount };
             } catch (e) {
-                console.warn('[G-Pilot] Failed to save step:', e);
+                console.error('[G-Pilot] Failed to save step:', e);
                 return { ok: false, error: String(e) };
             }
         }
@@ -172,6 +207,19 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
             await chrome.storage.local.set({ recordingState: { ...state } });
             await sendToActiveTab({ type: 'MASKING_RULE_ADD', payload: rule });
             return { ok: true };
+        }
+
+        case 'GET_PROJECT_SESSIONS': {
+            const { projectId } = msg.payload as any;
+            try {
+                const res = await fetch(`${API_BASE}/sessions?project_id=${projectId}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                return data; // 返回 sessions 数组
+            } catch (e) {
+                console.error('[G-Pilot] Failed to fetch sessions:', e);
+                return [];
+            }
         }
 
         case 'STATE_SYNC_REQUEST': {

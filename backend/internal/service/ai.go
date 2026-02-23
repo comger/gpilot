@@ -14,6 +14,20 @@ import (
 	"github.com/gpilot/backend/internal/db"
 )
 
+// MockConfigForTest 返回空配置（用于测试：让 DB 配置覆盖空环境变量）
+func MockConfigForTest() config.LLMConfig {
+	return config.LLMConfig{
+		GeminiBaseURL:     "https://generativelanguage.googleapis.com/v1beta",
+		GeminiModel:       "gemini-2.0-flash",
+		ZhipuBaseURL:      "https://open.bigmodel.cn/api/paas/v4",
+		ZhipuModel:        "glm-4v-flash",
+		OllamaBaseURL:     "http://localhost:11434",
+		OllamaModel:       "qwen2.5-vl:7b",
+		OpenRouterBaseURL: "https://openrouter.ai/api/v1",
+		OpenAIBaseURL:     "https://api.openai.com/v1",
+	}
+}
+
 // VLMRequest 统一的 VLM 请求
 type VLMRequest struct {
 	StepAction    string

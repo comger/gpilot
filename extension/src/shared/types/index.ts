@@ -16,7 +16,9 @@ export type MessageType =
     | 'FLOATING_CONSOLE_SHOW'
     | 'FLOATING_CONSOLE_HIDE'
     | 'MARK_MODE_ENTER'
-    | 'MARK_MODE_EXIT';
+    | 'MARK_MODE_EXIT'
+    | 'GET_PROJECT_SESSIONS'
+    | 'STEP_UPDATED';
 
 // 后端 API 根地址
 export const API_BASE = 'http://localhost:3210/api/v1';
@@ -45,6 +47,7 @@ export interface Session {
     ended_at?: string;
     target_url: string;
     generated_doc_id?: string;
+    step_count?: number;
     created_at: string;
 }
 

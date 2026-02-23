@@ -29,9 +29,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/index.ts"],
-      "css": ["src/content/content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/index.ts"
+      ],
+      "css": [
+        "src/content/content.css"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -46,8 +52,12 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["src/content/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "src/content/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
