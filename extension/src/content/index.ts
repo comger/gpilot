@@ -1,4 +1,5 @@
 // Content Script 入口 - 事件监听 + 脱敏 + 悬浮控制台
+import './content.css';
 import { applyMaskingRules, generateDOMFingerprint, getStableSelector, getXPath } from '../shared/utils';
 import type { ActionType, MaskingRule } from '../shared/types';
 
@@ -10,6 +11,29 @@ let isPaused = false;
 let sessionId: string | null = null;
 let maskRules: MaskingRule[] = [];
 let isMarkMode = false;
+
+// ─────────────────────────────────────
+// 同步状态（防止刷新页面后状态丢失）
+// ─────────────────────────────────────
+async function syncStateWithBackground() {
+    const state = await safeSendMessage({ type: 'STATE_SYNC_REQUEST' });
+    if (state && state.isRecording) {
+        isRecording = true;
+        isPaused = state.isPaused;
+        sessionId = state.sessionId;
+        maskRules = state.maskRules ?? [];
+        showFloatingConsole();
+        updateStepCounter(state.stepCount);
+        updateFloatingConsoleStatus();
+
+        // 如果刚进入新页面，记录一次导航
+        if (isRecording && !isPaused) {
+            captureEvent('navigation', document.body, { inputValue: location.href });
+        }
+    }
+}
+
+syncStateWithBackground();
 
 // ─────────────────────────────────────
 // 接收 background 消息
@@ -90,14 +114,16 @@ function captureEvent(action: ActionType, el: Element, extra?: { inputValue?: st
         dom_fingerprint: generateDOMFingerprint(action, ariaLabel, tagName, rawText),
     };
 
-    // 截图（在发送 step 前先捕获当前视口）
-    captureScreenshot().then(screenshotDataURL => {
-        safeSendMessage({
-            type: 'STEP_CAPTURED',
-            payload: { ...step, screenshot_data_url: screenshotDataURL, screenshot_width: window.innerWidth, screenshot_height: window.innerHeight },
-        }).then(resp => {
-            if (resp?.stepIndex) updateStepCounter(resp.stepIndex);
-        });
+    // 发送 step 给 background（由 background 补全截图并保存）
+    safeSendMessage({
+        type: 'STEP_CAPTURED',
+        payload: {
+            ...step,
+            screenshot_width: window.innerWidth,
+            screenshot_height: window.innerHeight
+        },
+    }).then(resp => {
+        if (resp?.stepIndex) updateStepCounter(resp.stepIndex);
     });
 }
 

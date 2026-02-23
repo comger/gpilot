@@ -119,12 +119,30 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
             if (!state.isRecording || state.isPaused || !state.sessionId) return { ok: false };
             const payload = msg.payload as any;
 
+            // 截图逻辑移到 background 处理，更稳健
+            let screenshotDataURL = payload.screenshot_data_url || '';
+            if (!screenshotDataURL) {
+                try {
+                    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                    if (tab?.id && tab.windowId) {
+                        screenshotDataURL = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
+                    }
+                } catch (e) {
+                    console.warn('[G-Pilot] Screenshot failed during step capture:', e);
+                }
+            }
+
             try {
                 const stepRes = await fetch(`${API_BASE}/sessions/${state.sessionId}/steps`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ...payload, session_id: state.sessionId }),
+                    body: JSON.stringify({
+                        ...payload,
+                        session_id: state.sessionId,
+                        screenshot_data_url: screenshotDataURL
+                    }),
                 });
+                if (!stepRes.ok) throw new Error(`HTTP ${stepRes.status}`);
                 const stepData = await stepRes.json();
                 state.stepCount++;
                 await chrome.storage.local.set({ recordingState: { ...state } });

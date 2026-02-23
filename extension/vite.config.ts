@@ -26,7 +26,9 @@ export default defineConfig({
         },
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: (info) => {
-          if (info.name?.endsWith('.css')) return 'content.css';
+          if (info.name === 'content.css') return 'content.css';
+          if (info.name === 'popup.css') return 'popup.css';
+          if (info.name?.endsWith('.css')) return '[name].css';
           return 'assets/[name]-[hash][extname]';
         },
       },
