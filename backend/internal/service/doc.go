@@ -64,38 +64,153 @@ func (s *DocService) BuildDocument(sessionID string) (*GeneratedDocContent, erro
 		screenshotMap[sc.StepID] = sc.DataURL
 	}
 
-	// 构建业务视图 steps
+	// 构建业务视图 steps (支持按区域合并所有连续操作)
 	bizSteps := make([]DocStep, 0, len(steps))
 	techSteps := make([]DocStep, 0, len(steps))
 
-	for _, step := range steps {
-		desc := step.AIDescription
-		if desc == "" {
-			desc = step.TargetElement
+	type stepContext struct {
+		location string
+		compName string
+		purpose  string
+		verb     string
+	}
+
+	parseStep := func(t string, action string) stepContext {
+		ctx := stepContext{location: "页面区域", compName: "组件", purpose: "业务交互"}
+
+		// 提取位置
+		const locAnchor = "页面的 "
+		if idx := strings.Index(t, locAnchor); idx != -1 {
+			sub := t[idx+len(locAnchor):]
+			if endIdx := strings.Index(sub, "，"); endIdx != -1 {
+				ctx.location = strings.TrimSpace(sub[:endIdx])
+			}
 		}
+
+		// 提取组件名
+		const compAnchor = "功能为 "
+		if idx := strings.Index(t, compAnchor); idx != -1 {
+			sub := t[idx+len(compAnchor):]
+			if endIdx := strings.Index(sub, " 的"); endIdx != -1 {
+				ctx.compName = strings.TrimSpace(sub[:endIdx])
+			}
+		}
+
+		// 提取目的
+		const purposeAnchor = "实现 "
+		if idx := strings.Index(t, purposeAnchor); idx != -1 {
+			sub := t[idx+len(purposeAnchor):]
+			ctx.purpose = strings.TrimRight(strings.TrimSpace(sub), "。")
+		}
+
+		// 提取动词 - 优先从语义描述中提取，其次根据 action 兜底
+		if strings.Contains(t, "录入了") {
+			ctx.verb = "录入"
+		} else if strings.Contains(t, "切换到") {
+			ctx.verb = "切换到"
+		} else if strings.Contains(t, "选择了") {
+			ctx.verb = "选择"
+		} else if strings.Contains(t, "点击了") {
+			ctx.verb = "点击"
+		} else {
+			switch action {
+			case "click":
+				ctx.verb = "点击"
+			case "input":
+				ctx.verb = "录入"
+			case "select":
+				ctx.verb = "选择"
+			default:
+				ctx.verb = "操作"
+			}
+		}
+		return ctx
+	}
+
+	var currentGroup []db.RecordingStep
+
+	flushGroup := func() {
+		if len(currentGroup) == 0 {
+			return
+		}
+
+		first := currentGroup[0]
+		last := currentGroup[len(currentGroup)-1]
+
+		var desc string
+		if len(currentGroup) == 1 {
+			desc = first.AIDescription
+			if desc == "" {
+				desc = first.TargetElement
+			}
+		} else {
+			// 聚合描述生成
+			actions := []string{}
+			lastPurpose := ""
+			firstCtx := parseStep(first.TargetElement, first.Action)
+
+			for _, s := range currentGroup {
+				ctx := parseStep(s.TargetElement, s.Action)
+				actions = append(actions, fmt.Sprintf("%s 【%s】", ctx.verb, ctx.compName))
+				lastPurpose = ctx.purpose
+			}
+
+			desc = fmt.Sprintf("在 %s 页面的 %s，依次 %s，最终实现 %s。",
+				first.PageTitle, firstCtx.location, strings.Join(actions, "、"), lastPurpose)
+		}
+
 		if desc == "" {
-			desc = fmt.Sprintf("在 [%s] 页面执行 %s 操作", step.PageTitle, step.Action)
+			desc = fmt.Sprintf("在 [%s] 页面执行 %s 操作", first.PageTitle, first.Action)
 		}
 
 		bizStep := DocStep{
-			StepIndex:     step.StepIndex,
-			Action:        step.Action,
+			StepIndex:     first.StepIndex,
+			Action:        first.Action,
 			Description:   desc,
-			ScreenshotID:  step.ScreenshotID,
-			ScreenshotURL: screenshotMap[step.ID],
-			PageTitle:     step.PageTitle,
-			IsEdited:      step.IsEdited,
+			ScreenshotID:  last.ScreenshotID,
+			ScreenshotURL: screenshotMap[last.ID],
+			PageTitle:     first.PageTitle,
+			IsEdited:      first.IsEdited,
 		}
 		bizSteps = append(bizSteps, bizStep)
 
-		techStep := bizStep
-		techStep.PageURL = step.PageURL
-		techStep.TechNote = fmt.Sprintf(
-			"元素：%s\nXPath：%s\nCSS：%s\nAction：%s",
-			step.TargetElement, step.TargetXPath, step.TargetSelector, step.Action,
-		)
-		techSteps = append(techSteps, techStep)
+		// 技术视图暂不合并，保持原始细节
+		for _, s := range currentGroup {
+			tStep := DocStep{
+				StepIndex:     s.StepIndex,
+				Action:        s.Action,
+				Description:   s.TargetElement,
+				ScreenshotID:  s.ScreenshotID,
+				ScreenshotURL: screenshotMap[s.ID],
+				PageTitle:     s.PageTitle,
+				PageURL:       s.PageURL,
+				TechNote: fmt.Sprintf(
+					"元素：%s\nXPath：%s\nCSS：%s\nAction：%s",
+					s.TargetElement, s.TargetXPath, s.TargetSelector, s.Action,
+				),
+			}
+			techSteps = append(techSteps, tStep)
+		}
+
+		currentGroup = nil
 	}
+
+	for _, step := range steps {
+		if len(currentGroup) > 0 {
+			prev := currentGroup[0]
+			ctxPrev := parseStep(prev.TargetElement, prev.Action)
+			ctxCurr := parseStep(step.TargetElement, step.Action)
+
+			// 合并条件：同一页面 且 同一位置
+			canMerge := step.PageTitle == prev.PageTitle && ctxCurr.location == ctxPrev.location
+
+			if !canMerge {
+				flushGroup()
+			}
+		}
+		currentGroup = append(currentGroup, step)
+	}
+	flushGroup()
 
 	content := &GeneratedDocContent{
 		SessionTitle: session.Title,
