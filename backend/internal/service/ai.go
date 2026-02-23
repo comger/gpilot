@@ -33,7 +33,7 @@ type VLMResponse struct {
 
 // AIService AI 调度服务（免费优先路由）
 type AIService struct {
-	cfg    *config.LLMConfig
+	cfg    *config.LLMConfig // 环境变量默认配置（就算 DB 没有记录也能工作）
 	client *http.Client
 }
 
@@ -44,27 +44,99 @@ func NewAIService(cfg *config.LLMConfig) *AIService {
 	}
 }
 
+// effectiveCfg 每次调用时从 DB 动态加载，当前 DB 配置优先于环境变量
+func (s *AIService) effectiveCfg() *config.LLMConfig {
+	// 拷贝环境变量默认配置
+	cfg := *s.cfg
+
+	// 从 DB 对应到配置字段的映射
+	apply := func(name string, setFn func(p db.LLMProvider)) {
+		var p db.LLMProvider
+		if err := db.DB.Where("name = ? AND is_active = ?", name, true).First(&p).Error; err == nil {
+			setFn(p)
+		}
+	}
+
+	apply("gemini", func(p db.LLMProvider) {
+		if p.APIKey != "" {
+			cfg.GeminiAPIKey = p.APIKey
+		}
+		if p.BaseURL != "" {
+			cfg.GeminiBaseURL = p.BaseURL
+		}
+		if p.Model != "" {
+			cfg.GeminiModel = p.Model
+		}
+	})
+	apply("zhipu", func(p db.LLMProvider) {
+		if p.APIKey != "" {
+			cfg.ZhipuAPIKey = p.APIKey
+		}
+		if p.BaseURL != "" {
+			cfg.ZhipuBaseURL = p.BaseURL
+		}
+		if p.Model != "" {
+			cfg.ZhipuModel = p.Model
+		}
+	})
+	apply("ollama", func(p db.LLMProvider) {
+		if p.BaseURL != "" {
+			cfg.OllamaBaseURL = p.BaseURL
+		}
+		if p.Model != "" {
+			cfg.OllamaModel = p.Model
+		}
+	})
+	apply("openrouter", func(p db.LLMProvider) {
+		if p.APIKey != "" {
+			cfg.OpenRouterAPIKey = p.APIKey
+		}
+		if p.BaseURL != "" {
+			cfg.OpenRouterBaseURL = p.BaseURL
+		}
+		if p.Model != "" {
+			cfg.OpenRouterModel = p.Model
+		}
+	})
+	apply("openai", func(p db.LLMProvider) {
+		if p.APIKey != "" {
+			cfg.OpenAIAPIKey = p.APIKey
+		}
+		if p.BaseURL != "" {
+			cfg.OpenAIBaseURL = p.BaseURL
+		}
+		if p.Model != "" {
+			cfg.OpenAIModel = p.Model
+		}
+	})
+
+	return &cfg
+}
+
 // GenerateStepDescription 为操作步骤生成自然语言描述（免费优先）
 func (s *AIService) GenerateStepDescription(req VLMRequest) (*VLMResponse, error) {
+	// 每次调用时动态加载最新 DB 配置，实现“保存即生效”
+	eff := s.effectiveCfg()
+
 	// 免费优先路由链
 	chain := []struct {
 		name    string
-		fn      func(VLMRequest) (string, error)
+		fn      func(VLMRequest, *config.LLMConfig) (string, error)
 		isFree  bool
 		enabled bool
 	}{
-		{"ollama", s.callOllama, true, s.isOllamaAvailable()},
-		{"zhipu", s.callZhipu, true, s.cfg.ZhipuAPIKey != ""},
-		{"gemini", s.callGemini, true, s.cfg.GeminiAPIKey != ""},
-		{"openrouter", s.callOpenRouter, true, s.cfg.OpenRouterAPIKey != ""},
-		{"openai", s.callOpenAI, false, s.cfg.OpenAIAPIKey != ""},
+		{"ollama", s.callOllama, true, s.isOllamaAvailableWithCfg(eff)},
+		{"zhipu", s.callZhipu, true, eff.ZhipuAPIKey != ""},
+		{"gemini", s.callGemini, true, eff.GeminiAPIKey != ""},
+		{"openrouter", s.callOpenRouter, true, eff.OpenRouterAPIKey != ""},
+		{"openai", s.callOpenAI, false, eff.OpenAIAPIKey != ""},
 	}
 
 	for _, provider := range chain {
 		if !provider.enabled {
 			continue
 		}
-		desc, err := provider.fn(req)
+		desc, err := provider.fn(req, eff)
 		if err != nil {
 			// 降级到下一个
 			continue
@@ -103,7 +175,7 @@ func (s *AIService) buildPrompt(req VLMRequest) string {
 // ─────────────────────────────────────────────────────────────
 // Gemini 2.0 Flash 适配器（免费层）
 // ─────────────────────────────────────────────────────────────
-func (s *AIService) callGemini(req VLMRequest) (string, error) {
+func (s *AIService) callGemini(req VLMRequest, cfg *config.LLMConfig) (string, error) {
 	type InlineData struct {
 		MimeType string `json:"mime_type"`
 		Data     string `json:"data"`
@@ -126,12 +198,11 @@ func (s *AIService) callGemini(req VLMRequest) (string, error) {
 
 	parts := []Part{{Text: s.buildPrompt(req)}}
 	if req.ScreenshotB64 != "" {
-		// 去掉 data:image/png;base64, 前缀
 		imgData := req.ScreenshotB64
 		if idx := strings.Index(imgData, ","); idx != -1 {
 			imgData = imgData[idx+1:]
 		}
-		parts = append(parts, Part{InlineData: &InlineData{MimeType: "image/png", Data: imgData}})
+		parts = append(parts, Part{InlineData: &InlineData{MimeType: "image/jpeg", Data: imgData}})
 	}
 
 	body := GeminiReq{
@@ -140,7 +211,7 @@ func (s *AIService) callGemini(req VLMRequest) (string, error) {
 	}
 
 	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s",
-		s.cfg.GeminiBaseURL, s.cfg.GeminiModel, s.cfg.GeminiAPIKey)
+		cfg.GeminiBaseURL, cfg.GeminiModel, cfg.GeminiAPIKey)
 
 	return s.doGeminiRequest(url, body)
 }
@@ -178,11 +249,11 @@ func (s *AIService) doGeminiRequest(url string, body interface{}) (string, error
 // ─────────────────────────────────────────────────────────────
 // 智谱 GLM-4V-Flash 适配器（兼容 OpenAI 接口，免费）
 // ─────────────────────────────────────────────────────────────
-func (s *AIService) callZhipu(req VLMRequest) (string, error) {
+func (s *AIService) callZhipu(req VLMRequest, cfg *config.LLMConfig) (string, error) {
 	return s.callOpenAICompatible(
-		s.cfg.ZhipuBaseURL+"/chat/completions",
-		s.cfg.ZhipuModel,
-		s.cfg.ZhipuAPIKey,
+		cfg.ZhipuBaseURL+"/chat/completions",
+		cfg.ZhipuModel,
+		cfg.ZhipuAPIKey,
 		req,
 	)
 }
@@ -190,11 +261,11 @@ func (s *AIService) callZhipu(req VLMRequest) (string, error) {
 // ─────────────────────────────────────────────────────────────
 // OpenRouter + Qwen2.5-VL（免费配额）
 // ─────────────────────────────────────────────────────────────
-func (s *AIService) callOpenRouter(req VLMRequest) (string, error) {
+func (s *AIService) callOpenRouter(req VLMRequest, cfg *config.LLMConfig) (string, error) {
 	return s.callOpenAICompatible(
-		s.cfg.OpenRouterBaseURL+"/chat/completions",
-		s.cfg.OpenRouterModel,
-		s.cfg.OpenRouterAPIKey,
+		cfg.OpenRouterBaseURL+"/chat/completions",
+		cfg.OpenRouterModel,
+		cfg.OpenRouterAPIKey,
 		req,
 	)
 }
@@ -202,11 +273,11 @@ func (s *AIService) callOpenRouter(req VLMRequest) (string, error) {
 // ─────────────────────────────────────────────────────────────
 // OpenAI（付费，最低优先级）
 // ─────────────────────────────────────────────────────────────
-func (s *AIService) callOpenAI(req VLMRequest) (string, error) {
+func (s *AIService) callOpenAI(req VLMRequest, cfg *config.LLMConfig) (string, error) {
 	return s.callOpenAICompatible(
-		s.cfg.OpenAIBaseURL+"/chat/completions",
-		s.cfg.OpenAIModel,
-		s.cfg.OpenAIAPIKey,
+		cfg.OpenAIBaseURL+"/chat/completions",
+		cfg.OpenAIModel,
+		cfg.OpenAIAPIKey,
 		req,
 	)
 }
@@ -289,7 +360,7 @@ func (s *AIService) callOpenAICompatible(url, model, apiKey string, req VLMReque
 // ─────────────────────────────────────────────────────────────
 // Ollama 本地适配器（完全免费）
 // ─────────────────────────────────────────────────────────────
-func (s *AIService) callOllama(req VLMRequest) (string, error) {
+func (s *AIService) callOllama(req VLMRequest, cfg *config.LLMConfig) (string, error) {
 	type OllamaReq struct {
 		Model  string   `json:"model"`
 		Prompt string   `json:"prompt"`
@@ -298,7 +369,7 @@ func (s *AIService) callOllama(req VLMRequest) (string, error) {
 	}
 
 	body := OllamaReq{
-		Model:  s.cfg.OllamaModel,
+		Model:  cfg.OllamaModel,
 		Prompt: s.buildPrompt(req),
 		Stream: false,
 	}
@@ -308,14 +379,13 @@ func (s *AIService) callOllama(req VLMRequest) (string, error) {
 		if idx := strings.Index(imgData, ","); idx != -1 {
 			imgData = imgData[idx+1:]
 		}
-		// 验证是有效的 base64
 		if _, err := base64.StdEncoding.DecodeString(imgData[:min(len(imgData), 100)]); err == nil {
 			body.Images = []string{imgData}
 		}
 	}
 
 	data, _ := json.Marshal(body)
-	resp, err := s.client.Post(s.cfg.OllamaBaseURL+"/api/generate", "application/json", bytes.NewReader(data))
+	resp, err := s.client.Post(cfg.OllamaBaseURL+"/api/generate", "application/json", bytes.NewReader(data))
 	if err != nil {
 		return "", err
 	}
@@ -334,9 +404,9 @@ func (s *AIService) callOllama(req VLMRequest) (string, error) {
 	return strings.TrimSpace(result.Response), nil
 }
 
-func (s *AIService) isOllamaAvailable() bool {
+func (s *AIService) isOllamaAvailableWithCfg(cfg *config.LLMConfig) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(s.cfg.OllamaBaseURL + "/api/tags")
+	resp, err := client.Get(cfg.OllamaBaseURL + "/api/tags")
 	if err != nil {
 		return false
 	}
@@ -377,39 +447,40 @@ type ProviderStatus struct {
 }
 
 func (s *AIService) GetProvidersStatus() []ProviderStatus {
+	eff := s.effectiveCfg()
 	return []ProviderStatus{
 		{
 			ID:        "ollama",
 			Name:      "Ollama 本地 (完全免费)",
-			Available: s.isOllamaAvailable(),
+			Available: s.isOllamaAvailableWithCfg(eff),
 			IsFree:    true,
-			Reason:    "需要本地安装 Ollama 并运行 " + s.cfg.OllamaModel,
+			Reason:    "需要本地安装 Ollama 并运行 " + eff.OllamaModel,
 		},
 		{
 			ID:        "zhipu",
-			Name:      "智谱 GLM-4V-Flash (免费)",
-			Available: s.cfg.ZhipuAPIKey != "",
+			Name:      "智谰 GLM-4V-Flash (免费)",
+			Available: eff.ZhipuAPIKey != "",
 			IsFree:    true,
 			Reason:    "需要配置 ZHIPU_API_KEY",
 		},
 		{
 			ID:        "gemini",
 			Name:      "Google Gemini 2.0 Flash (免费层)",
-			Available: s.cfg.GeminiAPIKey != "",
+			Available: eff.GeminiAPIKey != "",
 			IsFree:    true,
 			Reason:    "需要配置 GEMINI_API_KEY（https://aistudio.google.com）",
 		},
 		{
 			ID:        "openrouter",
 			Name:      "OpenRouter Qwen2.5-VL (免费配额)",
-			Available: s.cfg.OpenRouterAPIKey != "",
+			Available: eff.OpenRouterAPIKey != "",
 			IsFree:    true,
 			Reason:    "需要配置 OPENROUTER_API_KEY",
 		},
 		{
 			ID:        "openai",
 			Name:      "OpenAI GPT-4o-mini (付费)",
-			Available: s.cfg.OpenAIAPIKey != "",
+			Available: eff.OpenAIAPIKey != "",
 			IsFree:    false,
 			Reason:    "付费服务，需配置 OPENAI_API_KEY",
 		},
