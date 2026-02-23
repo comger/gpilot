@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { RecordingState, Project, Session } from '../../shared/types';
-import { apiGet } from '../../shared/utils';
+import { apiGet, apiDelete } from '../../shared/utils';
 
 interface Props {
     recordingState: RecordingState;
@@ -304,17 +304,35 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                     <div className="card">
                         <div className="card-title">最近录制</div>
                         {sessions.slice(0, 4).map(s => (
-                            <div key={s.id} className="list-item" onClick={() => {
-                                setStoppedSession(s);
-                                setDocStatus('idle');
-                            }}>
-                                <div>
+                            <div key={s.id} className="list-item" style={{ cursor: 'default' }}>
+                                <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => {
+                                    setStoppedSession(s);
+                                    setDocStatus('idle');
+                                }}>
                                     <div className="list-item-title">{s.title}</div>
                                     <div className="list-item-sub">{new Date(s.created_at).toLocaleDateString('zh-CN')}</div>
                                 </div>
-                                <span className={`badge ${s.status === 'completed' ? 'badge-success' : s.status === 'recording' ? 'badge-recording' : 'badge-idle'}`}>
-                                    {s.status === 'completed' ? '完成' : s.status === 'recording' ? '录制中' : s.status}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span className={`badge ${s.status === 'completed' ? 'badge-success' : s.status === 'recording' ? 'badge-recording' : 'badge-idle'}`}>
+                                        {s.status === 'completed' ? '完成' : s.status === 'recording' ? '录制中' : s.status}
+                                    </span>
+                                    <button
+                                        className="btn btn-ghost"
+                                        style={{ padding: '4px 8px', color: 'var(--danger)', borderColor: 'transparent' }}
+                                        onClick={async () => {
+                                            if (confirm('确定要删除这段录制记录吗？')) {
+                                                try {
+                                                    await apiDelete(`/sessions/${s.id}`);
+                                                    setSessions(sessions.filter(item => item.id !== s.id));
+                                                } catch (e: any) {
+                                                    setError(e.message);
+                                                }
+                                            }
+                                        }}
+                                    >
+                                        🗑
+                                    </button>
+                                </div>
                             </div>
                         ))}
                     </div>

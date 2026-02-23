@@ -30,6 +30,15 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     return json.data ?? json;
 }
 
+export async function apiDelete<T>(path: string): Promise<T> {
+    const res = await fetch(`${API_BASE}${path}`, {
+        method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(`API error ${res.status}`);
+    const json = await res.json();
+    return json.data ?? json;
+}
+
 // DOM 指纹生成（用于知识图谱跨录制去重）
 export function generateDOMFingerprint(
     action: string,

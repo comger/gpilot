@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { Project, Session } from '../../shared/types';
-import { apiGet, apiPost } from '../../shared/utils';
+import { apiGet, apiPost, apiDelete } from '../../shared/utils';
 
 export default function ProjectsTab() {
     const [projects, setProjects] = useState<Project[]>([]);
@@ -29,6 +29,30 @@ export default function ProjectsTab() {
             apiGet<Session[]>(`/sessions?project_id=${selectedProject.id}`).then(setSessions).catch(() => { });
         }
     }, [selectedProject]);
+
+    const handleDeleteProject = async (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        if (!confirm('确定要删除该项目及其所有录制记录吗？')) return;
+        try {
+            await apiDelete(`/projects/${id}`);
+            await loadProjects();
+        } catch (e: any) {
+            setError(e.message);
+        }
+    };
+
+    const handleDeleteSession = async (id: string) => {
+        if (!confirm('确定要删除这段录制记录吗？')) return;
+        try {
+            await apiDelete(`/sessions/${id}`);
+            if (selectedProject) {
+                const ss = await apiGet<Session[]>(`/sessions?project_id=${selectedProject.id}`);
+                setSessions(ss);
+            }
+        } catch (e: any) {
+            setError(e.message);
+        }
+    };
 
     const handleCreate = async () => {
         if (!newName.trim()) { setError('请填写项目名称'); return; }
@@ -75,20 +99,30 @@ export default function ProjectsTab() {
                         </div>
                     ) : (
                         sessions.map(s => (
-                            <div key={s.id} className="list-item">
-                                <div>
+                            <div key={s.id} className="list-item" style={{ cursor: 'default' }}>
+                                <div style={{ flex: 1 }}>
                                     <div className="list-item-title">{s.title}</div>
                                     <div className="list-item-sub">
                                         {new Date(s.created_at).toLocaleString('zh-CN')}
                                         {s.target_url && ` · ${new URL(s.target_url).hostname}`}
                                     </div>
                                 </div>
-                                <span className={`badge ${s.status === 'completed' ? 'badge-success'
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span className={`badge ${s.status === 'completed' ? 'badge-success'
                                         : s.status === 'recording' ? 'badge-recording'
                                             : 'badge-idle'
-                                    }`}>
-                                    {s.status === 'completed' ? '已完成' : s.status === 'recording' ? '录制中' : s.status}
-                                </span>
+                                        }`}>
+                                        {s.status === 'completed' ? '已完成' : s.status === 'recording' ? '录制中' : s.status}
+                                    </span>
+                                    <button
+                                        className="btn btn-ghost"
+                                        style={{ padding: '4px 8px', color: 'var(--danger)', borderColor: 'transparent' }}
+                                        onClick={() => handleDeleteSession(s.id)}
+                                        title="删除记录"
+                                    >
+                                        🗑
+                                    </button>
+                                </div>
                             </div>
                         ))
                     )}
@@ -141,16 +175,25 @@ export default function ProjectsTab() {
             ) : (
                 projects.map(p => (
                     <div key={p.id} className="list-item" onClick={() => setSelectedProject(p)}>
-                        <div>
+                        <div style={{ flex: 1 }}>
                             <div className="list-item-title">{p.name}</div>
                             <div className="list-item-sub">
                                 {p.description || '暂无描述'} ·
                                 <span className="tag" style={{ marginLeft: 4 }}>{p.template_type}</span>
                             </div>
                         </div>
-                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                            {p.sessions?.length ?? 0} 次录制
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                {p.sessions?.length ?? 0} 次录制
+                            </span>
+                            <button
+                                className="btn btn-ghost"
+                                style={{ padding: '4px 8px', color: 'var(--danger)', borderColor: 'transparent' }}
+                                onClick={(e) => handleDeleteProject(e, p.id)}
+                            >
+                                🗑
+                            </button>
+                        </div>
                     </div>
                 ))
             )}
