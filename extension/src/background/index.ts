@@ -140,16 +140,30 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
             const payload = msg.payload as any;
             console.log(`[G-Pilot] Step captured: ${payload.action}, target: ${payload.target_element}`);
 
-            // 截图逻辑移到 background 处理，更稳健
             let screenshotDataURL = payload.screenshot_data_url || '';
             if (!screenshotDataURL) {
                 try {
                     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
                     if (tab?.id && tab.windowId) {
-                        screenshotDataURL = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 70 });
+                        screenshotDataURL = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 });
                     }
                 } catch (e) {
                     console.warn('[G-Pilot] Screenshot failed during step capture:', e);
+                }
+            }
+
+            // 处理截图：裁剪和绘制红框
+            if (screenshotDataURL) {
+                try {
+                    screenshotDataURL = await processScreenshot(
+                        screenshotDataURL,
+                        state.screenshotArea,
+                        payload.element_rect,
+                        payload.screenshot_width,
+                        payload.screenshot_height
+                    );
+                } catch (e) {
+                    console.warn('[G-Pilot] Screenshot processing failed:', e);
                 }
             }
 
@@ -176,9 +190,7 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
                     payload: { stepCount: state.stepCount }
                 };
 
-                // 通知当前 Web 页面（更新悬浮窗）
                 sendToActiveTab(updateMsg).catch(() => { });
-                // 通知 Popup（如果开启了）
                 chrome.runtime.sendMessage(updateMsg).catch(() => { });
 
                 return { stepId: stepData.data?.id, stepIndex: state.stepCount };
@@ -276,6 +288,74 @@ async function safeUpdateSessionStatus(sessionId: string, status: string): Promi
 // ─────────────────────────────────────
 // 扩展安装/更新时初始化
 // ─────────────────────────────────────
+// ─────────────────────────────────────
+// 截图处理：裁剪 + 绘制交互红框
+// ─────────────────────────────────────
+async function processScreenshot(dataUrl: string, area?: any, elementRect?: any, originalWidth?: number, originalHeight?: number): Promise<string> {
+    if (!area && !elementRect) return dataUrl;
+
+    try {
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const bitmap = await createImageBitmap(blob);
+
+        // 计算物理像素与 CSS 像素的缩放比例 (DPR)
+        let scale = 1;
+        if (originalWidth && originalWidth > 0) {
+            scale = bitmap.width / originalWidth;
+        }
+
+        let targetX = 0, targetY = 0, targetW = bitmap.width, targetH = bitmap.height;
+
+        if (area) {
+            // area 使用的是 CSS 像素，需要乘以 scale 转换为物理像素
+            targetX = area.x * scale;
+            targetY = area.y * scale;
+            targetW = area.width * scale;
+            targetH = area.height * scale;
+
+            // 防止越界
+            targetX = Math.max(0, Math.min(targetX, bitmap.width));
+            targetY = Math.max(0, Math.min(targetY, bitmap.height));
+            targetW = Math.min(targetW, bitmap.width - targetX);
+            targetH = Math.min(targetH, bitmap.height - targetY);
+        }
+
+        const canvas = new OffscreenCanvas(targetW, targetH);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return dataUrl;
+
+        // 绘制裁剪后的原图
+        ctx.drawImage(bitmap, targetX, targetY, targetW, targetH, 0, 0, targetW, targetH);
+
+        // 如果有元素位置，绘制红框
+        if (elementRect) {
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = Math.max(2, 3 * scale); // 根据 DPI 调整线宽
+
+            // 坐标转换：(CSS 坐标 * scale) - 裁剪起始物理坐标
+            const rx = (elementRect.left * scale) - targetX;
+            const ry = (elementRect.top * scale) - targetY;
+            const rw = elementRect.width * scale;
+            const rh = elementRect.height * scale;
+
+            // 绘制红框，稍微扩大一点范围以覆盖边缘
+            const padding = 2 * scale;
+            ctx.strokeRect(rx - padding, ry - padding, rw + padding * 2, rh + padding * 2);
+        }
+
+        const newBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(newBlob);
+        });
+    } catch (e) {
+        console.error('[G-Pilot] processScreenshot error:', e);
+        return dataUrl;
+    }
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
     await chrome.storage.local.set({
         recordingState: {

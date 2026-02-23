@@ -17,6 +17,8 @@ export type MessageType =
     | 'FLOATING_CONSOLE_HIDE'
     | 'MARK_MODE_ENTER'
     | 'MARK_MODE_EXIT'
+    | 'PICK_MODE_ENTER'
+    | 'PICK_MODE_EXIT'
     | 'GET_PROJECT_SESSIONS'
     | 'STEP_UPDATED';
 
@@ -70,6 +72,7 @@ export interface RecordingStep {
     is_edited: boolean;
     is_masked: boolean;
     dom_fingerprint?: string;
+    element_rect?: DOMRect;
 }
 
 export interface MaskingRule {
@@ -89,4 +92,10 @@ export interface RecordingState {
     projectId: string | null;
     stepCount: number;
     maskRules: MaskingRule[];
+    screenshotArea?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
 }
