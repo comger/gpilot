@@ -1,0 +1,24 @@
+{
+  "name": "g-pilot-extension",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "G-Pilot - 智能政务助手 Chrome 扩展",
+  "scripts": {
+    "dev": "vite --mode development",
+    "build": "vite build && npm run copy-assets",
+    "copy-assets": "node scripts/copy-assets.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.246",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^4.4.0"
+  }
+}

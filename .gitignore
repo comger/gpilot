@@ -1,0 +1,26 @@
+# ─── 敏感配置 ─── (绝不提交！)
+backend/.env
+**/.env
+
+# ─── Go 构建产物 ───
+backend/build/
+*.exe
+*.out
+backend/gpilot.db
+backend/gpilot.db-shm
+backend/gpilot.db-wal
+
+# ─── Node / 扩展 ───
+extension/node_modules/
+extension/dist/
+extension/package-lock.json
+
+# ─── 系统文件 ───
+.DS_Store
+Thumbs.db
+
+# ─── IDE ───
+.idea/
+.vscode/
+*.swp
+*.swo
