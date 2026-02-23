@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import RecordTab from './pages/RecordTab';
 import ProjectsTab from './pages/ProjectsTab';
 import SettingsTab from './pages/SettingsTab';
@@ -12,37 +12,63 @@ const TABS: { key: TabKey; label: string; icon: string }[] = [
     { key: 'settings', label: '设置', icon: '⚙️' },
 ];
 
+const DEFAULT_STATE: RecordingState = {
+    isRecording: false,
+    isPaused: false,
+    sessionId: null,
+    projectId: null,
+    stepCount: 0,
+    maskRules: [],
+};
+
 export default function App() {
     const [activeTab, setActiveTab] = useState<TabKey>('record');
-    const [recordingState, setRecordingState] = useState<RecordingState>({
-        isRecording: false,
-        isPaused: false,
-        sessionId: null,
-        projectId: null,
-        stepCount: 0,
-        maskRules: [],
-    });
+    const [recordingState, setRecordingState] = useState<RecordingState>(DEFAULT_STATE);
     const [backendOk, setBackendOk] = useState<boolean | null>(null);
 
-    // 同步 background 录制状态
+    // 标记是否由 popup 主动触发状态变更（防止轮询立即覆盖）
+    const localUpdateRef = useRef(false);
+
+    // ─── 从 background 同步状态 ───
     useEffect(() => {
-        const syncState = () => {
+        const syncFromBackground = () => {
+            // 如果刚刚由本地操作触发更新，跳过一次同步
+            if (localUpdateRef.current) {
+                localUpdateRef.current = false;
+                return;
+            }
             chrome.runtime.sendMessage({ type: 'STATE_SYNC_REQUEST' }, (resp) => {
-                if (resp && !chrome.runtime.lastError) {
+                if (chrome.runtime.lastError) return;
+                if (resp && typeof resp === 'object' && 'isRecording' in resp) {
                     setRecordingState(resp as RecordingState);
                 }
             });
         };
-        syncState();
-        const timer = setInterval(syncState, 2000);
+
+        // 立即同步一次
+        syncFromBackground();
+
+        // 每 1.5s 轮询（录制中时步骤计数需要更新）
+        const timer = setInterval(syncFromBackground, 1500);
         return () => clearInterval(timer);
     }, []);
 
-    // 检查后端连通性
+    // ─── 处理 popup 触发的状态变更 ───
+    const handleStateChange = (s: RecordingState) => {
+        localUpdateRef.current = true; // 跳过下次轮询
+        setRecordingState(s);
+    };
+
+    // ─── 检查后端 ───
     useEffect(() => {
-        fetch('http://localhost:3210/health')
-            .then(r => setBackendOk(r.ok))
-            .catch(() => setBackendOk(false));
+        const check = () => {
+            fetch('http://localhost:3210/health')
+                .then(r => setBackendOk(r.ok))
+                .catch(() => setBackendOk(false));
+        };
+        check();
+        const t = setInterval(check, 10000);
+        return () => clearInterval(t);
     }, []);
 
     return (
@@ -60,11 +86,14 @@ export default function App() {
                     {recordingState.isRecording ? (
                         recordingState.isPaused
                             ? <span className="badge badge-paused">⏸ 已暂停</span>
-                            : <span className="badge badge-recording">● 录制中 {recordingState.stepCount}步</span>
+                            : <span className="badge badge-recording">● {recordingState.stepCount}步</span>
                     ) : (
                         <span className="badge badge-idle">○ 待机</span>
                     )}
-                    <span style={{ fontSize: 10, color: backendOk ? 'var(--success)' : backendOk === false ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                    <span style={{
+                        fontSize: 10,
+                        color: backendOk ? 'var(--success)' : backendOk === false ? 'var(--danger)' : 'var(--text-secondary)'
+                    }}>
                         {backendOk === null ? '连接中...' : backendOk ? '✓ 后端在线' : '✗ 后端离线'}
                     </span>
                 </div>
@@ -73,7 +102,10 @@ export default function App() {
             {/* Backend offline warning */}
             {backendOk === false && (
                 <div className="alert alert-warning" style={{ margin: '8px 14px 0', borderRadius: 8 }}>
-                    ⚠️ 后端未启动，请先运行 <code style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 4px', borderRadius: 3 }}>go run cmd/server/main.go</code>
+                    ⚠️ 后端未启动，请先运行：
+                    <code style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 4px', borderRadius: 3, display: 'block', marginTop: 4 }}>
+                        cd backend && go run cmd/server/main.go
+                    </code>
                 </div>
             )}
 
@@ -95,7 +127,7 @@ export default function App() {
                 {activeTab === 'record' && (
                     <RecordTab
                         recordingState={recordingState}
-                        onStateChange={setRecordingState}
+                        onStateChange={handleStateChange}
                     />
                 )}
                 {activeTab === 'projects' && <ProjectsTab />}

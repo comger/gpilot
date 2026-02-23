@@ -62,15 +62,23 @@ async function handleMessage(msg: ExtMessage): Promise<unknown> {
         }
 
         case 'SESSION_STOP': {
+            const stoppedSessionId = state.sessionId;
             state.isRecording = false;
             state.isPaused = false;
-            const sessionId = state.sessionId;
-            await updateSessionStatus(sessionId!, 'completed');
+            // 先完成 API 更新，再清空 sessionId
+            if (stoppedSessionId) {
+                try {
+                    await updateSessionStatus(stoppedSessionId, 'completed');
+                } catch (e) {
+                    console.warn('[G-Pilot] Failed to update session status:', e);
+                }
+            }
             state.sessionId = null;
             state.stepCount = 0;
             await chrome.storage.local.set({ recordingState: state });
+            // 通知 content script 隐藏悬浮控制台
             broadcastToActiveTab({ type: 'SESSION_STOP' });
-            return { sessionId, ok: true };
+            return { ok: true, stoppedSessionId };
         }
 
         case 'STEP_CAPTURED': {

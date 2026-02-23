@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { RecordingState, Project, Session } from '../../shared/types';
-import { apiGet, apiPost, apiPatch } from '../../shared/utils';
+import { apiGet } from '../../shared/utils';
 
 interface Props {
     recordingState: RecordingState;
@@ -12,12 +12,16 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
     const [sessions, setSessions] = useState<Session[]>([]);
     const [selectedProject, setSelectedProject] = useState('');
     const [sessionTitle, setSessionTitle] = useState('');
-    const [currentSession, setCurrentSession] = useState<Session | null>(null);
+    const [stoppedSession, setStoppedSession] = useState<Session | null>(null);
     const [docStatus, setDocStatus] = useState<'idle' | 'generating' | 'done'>('idle');
     const [docProgress, setDocProgress] = useState(0);
     const [docProgressTotal, setDocProgressTotal] = useState(0);
     const [docId, setDocId] = useState('');
     const [error, setError] = useState('');
+    const [stopping, setStopping] = useState(false);
+
+    // 同步录制结束后切换到的 session
+    const stoppedSessionId = stoppedSession?.id;
 
     useEffect(() => {
         apiGet<Project[]>('/projects').then(setProjects).catch(() => { });
@@ -29,19 +33,29 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
         }
     }, [selectedProject]);
 
-    // 加载当前 session
+    // 录制结束后，重新拉取 session 状态（确认 completed）
     useEffect(() => {
-        if (recordingState.sessionId) {
-            apiGet<Session>(`/sessions/${recordingState.sessionId}`).then(setCurrentSession).catch(() => { });
+        if (stoppedSessionId) {
+            const timer = setTimeout(() => {
+                apiGet<Session>(`/sessions/${stoppedSessionId}`)
+                    .then(s => setStoppedSession(s))
+                    .catch(() => { });
+            }, 800); // 等后端写入
+            return () => clearTimeout(timer);
         }
-    }, [recordingState.sessionId]);
+    }, [stoppedSessionId]);
 
+    // ─────────────────────────────────────
+    // 录制控制
+    // ─────────────────────────────────────
     const handleStartRecording = async () => {
         if (!selectedProject) { setError('请先选择项目'); return; }
         if (!sessionTitle.trim()) { setError('请填写本次录制标题'); return; }
 
         try {
             setError('');
+            setStoppedSession(null);
+            setDocStatus('idle');
             const [tab] = await (chrome.tabs.query({ active: true, currentWindow: true }) as Promise<chrome.tabs.Tab[]>);
             const targetUrl = tab?.url || '';
 
@@ -49,40 +63,101 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                 type: 'SESSION_START',
                 payload: { projectId: selectedProject, title: sessionTitle.trim(), targetUrl },
             });
+
+            if (chrome.runtime.lastError) {
+                setError('无法连接录制服务，请刷新扩展');
+                return;
+            }
+
             if (resp?.sessionId) {
-                onStateChange({ ...recordingState, isRecording: true, sessionId: resp.sessionId, projectId: selectedProject, stepCount: 0 });
+                onStateChange({
+                    ...recordingState,
+                    isRecording: true,
+                    isPaused: false,
+                    sessionId: resp.sessionId,
+                    projectId: selectedProject,
+                    stepCount: 0,
+                });
                 setSessionTitle('');
+            } else {
+                setError(resp?.error || '启动录制失败，请检查后端连接');
+            }
+        } catch (e: any) {
+            setError(e.message || '启动录制失败');
+        }
+    };
+
+    const handlePauseResume = async () => {
+        try {
+            if (recordingState.isPaused) {
+                await chrome.runtime.sendMessage({ type: 'SESSION_RESUME' });
+                onStateChange({ ...recordingState, isPaused: false });
+            } else {
+                await chrome.runtime.sendMessage({ type: 'SESSION_PAUSE' });
+                onStateChange({ ...recordingState, isPaused: true });
             }
         } catch (e: any) {
             setError(e.message);
         }
     };
 
-    const handlePauseResume = () => {
-        if (recordingState.isPaused) {
-            chrome.runtime.sendMessage({ type: 'SESSION_RESUME' });
-            onStateChange({ ...recordingState, isPaused: false });
-        } else {
-            chrome.runtime.sendMessage({ type: 'SESSION_PAUSE' });
-            onStateChange({ ...recordingState, isPaused: true });
-        }
-    };
-
     const handleStop = async () => {
-        chrome.runtime.sendMessage({ type: 'SESSION_STOP' });
-        onStateChange({ ...recordingState, isRecording: false, isPaused: false, sessionId: null });
-        if (recordingState.sessionId) {
-            setCurrentSession(prev => prev ? { ...prev, status: 'completed' } : null);
+        if (stopping) return;
+        setStopping(true);
+        try {
+            const currentSessionId = recordingState.sessionId; // 先保存，因为后续会清空
+
+            // 等待 background 完成状态更新和 API 调用
+            const resp = await chrome.runtime.sendMessage({ type: 'SESSION_STOP' });
+
+            if (chrome.runtime.lastError) {
+                setError('停止录制失败，请重试');
+                setStopping(false);
+                return;
+            }
+
+            // 更新 popup 状态（从 background 返回的最终状态）
+            onStateChange({
+                isRecording: false,
+                isPaused: false,
+                sessionId: null,
+                projectId: null,
+                stepCount: 0,
+                maskRules: recordingState.maskRules,
+            });
+
+            // 保留 stoppedSession 供生成文档使用
+            if (currentSessionId) {
+                setStoppedSession({
+                    id: currentSessionId,
+                    project_id: recordingState.projectId || '',
+                    title: '录制完成',
+                    status: 'completed',
+                    target_url: '',
+                    created_at: new Date().toISOString(),
+                });
+                // 刷新 sessions 列表
+                if (selectedProject) {
+                    apiGet<Session[]>(`/sessions?project_id=${selectedProject}`).then(setSessions).catch(() => { });
+                }
+            }
+        } catch (e: any) {
+            setError(e.message || '停止录制失败');
+        } finally {
+            setStopping(false);
         }
     };
 
+    // ─────────────────────────────────────
+    // 文档生成
+    // ─────────────────────────────────────
     const handleGenerateDoc = async () => {
-        if (!recordingState.sessionId && !currentSession?.id) return;
-        const sid = recordingState.sessionId || currentSession?.id;
+        const sid = stoppedSession?.id;
         if (!sid) return;
 
         setDocStatus('generating');
         setDocProgress(0);
+        setError('');
 
         const eventSource = new EventSource(`http://localhost:3210/api/v1/sessions/${sid}/generate`);
 
@@ -123,11 +198,13 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
         if (!alias) return;
         chrome.runtime.sendMessage({
             type: 'MASKING_RULE_ADD',
-            payload: { rule_type: 'regex', pattern, alias, scope: 'session', is_active: true },
+            payload: { rule_type: 'exact', pattern, alias, scope: 'session', is_active: true },
         });
     };
 
-    // ─── 未录制状态 ───
+    // ─────────────────────────────────────
+    // UI: 未录制状态
+    // ─────────────────────────────────────
     if (!recordingState.isRecording) {
         return (
             <div>
@@ -137,9 +214,7 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                     <div className="card-title">📁 选择项目</div>
 
                     {projects.length === 0 ? (
-                        <div className="alert alert-warning">
-                            还没有项目，请先在「项目」标签创建
-                        </div>
+                        <div className="alert alert-warning">还没有项目，请先在「项目」标签创建</div>
                     ) : (
                         <div className="form-group">
                             <select
@@ -161,7 +236,7 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                             <input
                                 className="input"
                                 type="text"
-                                placeholder="如：用户登录 -> 申请提交 -> 提交成功"
+                                placeholder="如：用户登录 → 申请提交 → 提交成功"
                                 value={sessionTitle}
                                 onChange={e => setSessionTitle(e.target.value)}
                                 onKeyDown={e => e.key === 'Enter' && handleStartRecording()}
@@ -178,28 +253,14 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                     </button>
                 </div>
 
-                {/* 最近的 sessions */}
-                {sessions.length > 0 && selectedProject && (
-                    <div className="card">
-                        <div className="card-title">最近录制</div>
-                        {sessions.slice(0, 4).map(s => (
-                            <div key={s.id} className="list-item" onClick={() => setCurrentSession(s)}>
-                                <div>
-                                    <div className="list-item-title">{s.title}</div>
-                                    <div className="list-item-sub">{new Date(s.created_at).toLocaleDateString('zh-CN')}</div>
-                                </div>
-                                <span className={`badge ${s.status === 'recording' ? 'badge-recording' : s.status === 'completed' ? 'badge-success' : 'badge-idle'}`}>
-                                    {s.status === 'completed' ? '完成' : s.status === 'recording' ? '录制中' : s.status}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                {/* 刚结束的 session → 生成文档 */}
+                {stoppedSession && (
+                    <div className="card" style={{ borderColor: 'rgba(99,179,237,0.4)' }}>
+                        <div className="card-title">📄 录制完成 — 生成文档</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                            Session ID: {stoppedSession.id.slice(0, 8)}...
+                        </div>
 
-                {/* 选中历史 session 生成文档 */}
-                {currentSession && currentSession.status === 'completed' && (
-                    <div className="card">
-                        <div className="card-title">📄 生成文档 — {currentSession.title}</div>
                         {docStatus === 'idle' && (
                             <button className="btn btn-primary btn-full" onClick={handleGenerateDoc}>
                                 ✨ AI 生成操作手册
@@ -208,10 +269,12 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                         {docStatus === 'generating' && (
                             <>
                                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                                    正在生成... {docProgress}/{docProgressTotal} 步骤
+                                    正在生成... {docProgress}/{docProgressTotal || '?'} 步骤
                                 </div>
                                 <div className="progress-wrap">
-                                    <div className="progress-bar" style={{ width: `${docProgressTotal > 0 ? (docProgress / docProgressTotal) * 100 : 5}%` }} />
+                                    <div className="progress-bar" style={{
+                                        width: `${docProgressTotal > 0 ? Math.round((docProgress / docProgressTotal) * 100) : 10}%`
+                                    }} />
                                 </div>
                             </>
                         )}
@@ -220,26 +283,53 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                                 <div className="alert alert-success" style={{ marginBottom: 10 }}>✅ 文档生成完成！</div>
                                 <div style={{ display: 'flex', gap: 8 }}>
                                     <button className="btn btn-ghost" onClick={handleExportMd} style={{ flex: 1 }}>
-                                        📥 导出 Markdown
+                                        📥 Markdown
                                     </button>
                                     <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => {
-                                        const url = `http://localhost:3210/api/v1/documents/${docId}/export?format=json`;
-                                        chrome.downloads.download({ url, filename: 'gpilot-doc.json' });
+                                        chrome.downloads.download({
+                                            url: `http://localhost:3210/api/v1/documents/${docId}/export?format=json`,
+                                            filename: 'gpilot-doc.json',
+                                        });
                                     }}>
-                                        📥 导出 JSON
+                                        📥 JSON
                                     </button>
                                 </div>
                             </div>
                         )}
                     </div>
                 )}
+
+                {/* 最近的 sessions */}
+                {sessions.length > 0 && selectedProject && !stoppedSession && (
+                    <div className="card">
+                        <div className="card-title">最近录制</div>
+                        {sessions.slice(0, 4).map(s => (
+                            <div key={s.id} className="list-item" onClick={() => {
+                                setStoppedSession(s);
+                                setDocStatus('idle');
+                            }}>
+                                <div>
+                                    <div className="list-item-title">{s.title}</div>
+                                    <div className="list-item-sub">{new Date(s.created_at).toLocaleDateString('zh-CN')}</div>
+                                </div>
+                                <span className={`badge ${s.status === 'completed' ? 'badge-success' : s.status === 'recording' ? 'badge-recording' : 'badge-idle'}`}>
+                                    {s.status === 'completed' ? '完成' : s.status === 'recording' ? '录制中' : s.status}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
         );
     }
 
-    // ─── 录制进行中 ───
+    // ─────────────────────────────────────
+    // UI: 录制进行中
+    // ─────────────────────────────────────
     return (
         <div>
+            {error && <div className="alert alert-error" style={{ marginBottom: 10 }}>{error}</div>}
+
             <div className="card" style={{ borderColor: recordingState.isPaused ? 'rgba(237,137,54,0.4)' : 'rgba(72,187,120,0.4)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <span className={`badge ${recordingState.isPaused ? 'badge-paused' : 'badge-recording'}`}>
@@ -257,8 +347,13 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                     <button className="btn btn-ghost" style={{ flex: 1 }} onClick={handlePauseResume}>
                         {recordingState.isPaused ? '▶ 继续' : '⏸ 暂停'}
                     </button>
-                    <button className="btn btn-danger" style={{ flex: 1 }} onClick={handleStop}>
-                        ⏹ 停止录制
+                    <button
+                        className="btn btn-danger"
+                        style={{ flex: 1, opacity: stopping ? 0.6 : 1 }}
+                        onClick={handleStop}
+                        disabled={stopping}
+                    >
+                        {stopping ? '停止中...' : '⏹ 停止录制'}
                     </button>
                 </div>
             </div>
@@ -272,7 +367,7 @@ export default function RecordTab({ recordingState, onStateChange }: Props) {
                         style={{ flex: 1 }}
                         onClick={() => {
                             chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-                                if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'MARK_MODE_ENTER' });
+                                if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'MARK_MODE_ENTER' });
                             });
                         }}
                     >
